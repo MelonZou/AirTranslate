@@ -4,6 +4,10 @@
 
 # AirTranslate
 
+<p align="center">
+  <a href="https://buymeacoffee.com/himomohi1"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support%20AirTranslate-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=000000" alt="Buy Me a Coffee — Support AirTranslate"></a>
+</p>
+
 Live Mac audio captions and translation for meetings, videos, lectures, interviews, and streams.
 
 <p align="center">
