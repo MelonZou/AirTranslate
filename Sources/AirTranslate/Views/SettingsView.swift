@@ -79,6 +79,7 @@ struct SettingsView: View {
         case .general:
             generalSettings
             AppleTranslationSettingsView(session: session)
+            EmbeddingGemmaTranscriptionView(isCaptureActive: session.isRunning || session.isStarting)
         case .apiKeys:
             apiKeySettings
         case .audio:

@@ -23,7 +23,21 @@
 
 AirTranslate 会捕获 Mac 正在播放的音频，实时转写；当你选择翻译流程时，它会进行翻译，并可将字幕悬浮在其他应用上方。Apple Mode 仍然是默认的本地优先流程。云端引擎为可选项，配置对应提供方密钥后即可使用。
 
-AirTranslate **1.16.0/build1160** 改进现有转写稳定性、重复翻译处理、字幕阅读及窗口控制，并新增 Apple 翻译选项、实验性 Jev 候选选择和仅悬浮模式采集。
+AirTranslate **1.17.0/build1170** 新增使用 EmbeddingGemma 2 在本机转写英语音频文件的可选功能。Apple 模式仍为默认方式，现有字幕和翻译改进继续提供。
+
+## 1.17.0 新增功能：英语文件本地转写
+
+- **可选文件转写：** 在设置 > 通用 > EmbeddingGemma 2 文件转写（实验）中使用。需要 Apple Silicon 和 macOS 27 及以上；应用整体最低要求仍为 macOS 26。仅限英语音频，最长60分钟／2 GB。与实时字幕独立运行，不恢复标点或大小写，不翻译音频，也不识别说话人。
+- **工作原理：** 固定的音频编码器生成随时间变化的表征，训练后的 reader 将其映射到英语单词嵌入，每个时刻选择单词或 blank。CTC 解码合并连续重复标签并移除 blank，生成文本。原实验的代码和 reader 权重未公开，因此使用独立公开复现的 reader v2。
+- **明确下载与完整性校验：** 仅在点击下载模型时，从固定的 Hugging Face revision 获取约935 MB文件。安装完成前校验文件大小及 SHA-256。安装至少需要2 GiB可用空间，本地编译也会占用空间。无需 API 密钥，此选项不上传音频或转写结果。
+- **使用与导出：** 先停止实时采集，下载模型、选择英语音频，再开始本地转写。提供进度与取消功能，可复制结果或保存 UTF-8 文本。取消后会等待当前模型调用完成，再丢弃结果。显示本次音频时长，以及包含解码和模型加载的处理时间。
+- **实验精度与速度：** 口音、噪声、专有名词及固定词表外的词会影响结果。首次模型加载可能更慢。原实验声称1小时音频约13秒的速度，不是 AirTranslate 的性能保证。
+
+[方法、设置与限制](docs/embeddinggemma-transcription.md) · [AirTranslate 1.17.0 发布](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0)。
+
+## 继续提供的字幕与翻译改进
+
+**1.16.0 引入的改进**继续提供，包括转写稳定性、重复翻译处理、字幕阅读、Apple 翻译选项、可选 Jev 候选选择及仅悬浮模式窗口控制。以下为保留功能，不是1.17.0的新修复。
 
 - **仅悬浮模式启动与控制：** 空闲时启动采集，暂停时恢复，并在进入运行状态后最小化主窗口。启动失败时保留主控制界面。菜单栏和应用菜单也支持开始、停止、暂停与恢复。
 - **上一条字幕显示：** 在当前字幕旁短暂保留上一条字幕，最多一个文本块、两行，持续8秒，并遵循“减少动态效果”设置。
@@ -56,11 +70,12 @@ AirTranslate **1.16.0/build1160** 改进现有转写稳定性、重复翻译处�
 
 ## 下载
 
-当前公开最新版：**v1.16.0**。
+当前公开最新版：**v1.17.0**。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.16.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.16.0/AirTranslate-1.16.0.zip)
+- [下载 AirTranslate-1.17.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.17.0/AirTranslate-1.17.0.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
+- [AirTranslate 1.17.0 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 
 开源 DMG 和 ZIP 使用 ad-hoc 签名，尚未经过 Apple 公证。若首次启动被阻止，请参阅[安装指南](docs/GETTING-STARTED.md)。可用以下命令检查 DMG 哈希：
@@ -144,6 +159,7 @@ Gemini 密钥由 Gemini Live 和可选的 Gemini 译文语音输出共用。选�
 
 ## 隐私
 
+- EmbeddingGemma 2 文件转写仅在请求时下载模型，音频和结果在本机处理且不上传。
 - Apple Mode 使用 macOS 框架和 Apple 管理的语言资源。
 - GPT、Gemini、Meta、Azure、Nari、Grok 和 Qwen 模式只会把所选功能需要的音频或文本，使用你的密钥直接发送给对应提供方。Gemini TTS 仅在你选择 Gemini 语音模型后发送稳定的译文文本。
 - 只有开启文件保存后，已保存记录才会作为普通文本文件留在你的 Mac 上。
@@ -152,6 +168,7 @@ Gemini 密钥由 Gemini Live 和可选的 Gemini 译文语音输出共用。选�
 ## 要求
 
 - macOS 26.0 或更高版本
+- 可选 EmbeddingGemma 2 文件转写：Apple Silicon 和 macOS 27 或更高版本
 - 源码构建需要 Swift 6.4 或更高版本
 - 支持系统音频捕获的 Mac
 - 可使用 Apple Speech 和 Apple Translation 框架
@@ -162,6 +179,7 @@ Gemini 密钥由 Gemini Live 和可选的 Gemini 译文语音输出共用。选�
 - [Getting Started](docs/GETTING-STARTED.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Nari STT notes](docs/nari-stt.md)
+- [EmbeddingGemma 2 方法与文件转写](docs/embeddinggemma-transcription.md)
 - [更新日志](CHANGELOG.md)
 - [版本历史](Release/VERSION-HISTORY.md)
 

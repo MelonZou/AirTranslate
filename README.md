@@ -27,7 +27,21 @@ Live Mac audio captions and translation for meetings, videos, lectures, intervie
 
 AirTranslate captures audio playing on your Mac, transcribes it live, translates it when you choose a translation workflow, and can keep captions floating above other apps. Apple Mode remains the default local-first workflow. Cloud engines are optional and become available after you configure the matching provider key.
 
-AirTranslate **1.16.0/build1160** improves transcription stability, duplicate translation handling, caption reading, and window controls, and adds Apple translation options, experimental Jev candidate selection, and floating-only capture.
+AirTranslate **1.17.0/build1170** adds optional local English audio-file transcription with EmbeddingGemma 2. Apple Mode remains the default, and the existing caption and translation improvements remain available.
+
+## New in 1.17.0: local English file transcription
+
+- **Optional file transcription:** open Settings > General > EmbeddingGemma 2 file transcription (experimental). Requires Apple Silicon and macOS 27+; the app itself still supports macOS 26+. English audio only, up to 60 minutes / 2 GB. It works separately from live captions and does not restore punctuation or capitalization, translate audio, or identify speakers.
+- **How it works:** a frozen audio encoder produces time-based representations. A trained reader maps them to English word embeddings, selects a word or blank at each step, and CTC decoding combines repeated labels and removes blanks. This uses the independent public reader v2 reproduction; the original experiment's code and reader weights are not public.
+- **Explicit model download and integrity:** choose Download models to fetch about 935 MB from a pinned Hugging Face revision. File sizes and SHA-256 hashes are verified before installation is accepted. Installation requires at least 2 GiB free; local model compilation also needs space. No API key is needed, and this option never uploads audio or transcript results.
+- **Use and export:** stop live capture, download the models, choose an English audio file, and select Transcribe locally. Progress and Cancel are available; copy the result or save UTF-8 text. Cancellation discards the result after any active model call finishes. The current run shows audio length and processing time, including decoding and model loading.
+- **Experimental accuracy and speed:** accents, noise, names, and words outside the fixed vocabulary affect results. First model loading may take longer. The original claim of one hour in about 13 seconds is not an AirTranslate performance guarantee.
+
+[Method, setup and limitations](docs/embeddinggemma-transcription.md) · [AirTranslate 1.17.0 release](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0).
+
+## Existing caption and translation improvements
+
+The improvements introduced in **1.16.0** remain available below, including transcription stability, duplicate translation handling, caption reading, Apple translation options, optional Jev selection, and floating-only window controls. They are retained features, not new fixes in 1.17.0.
 
 - **Floating-only start and controls:** starts an idle session or resumes a paused one, then minimizes the main window after capture is running. If startup fails, the main controls remain available. Start/stop and pause/resume are also available from the menu bar and app menus.
 - **Previous-caption history:** keeps one previous caption block visible briefly alongside the current text, with up to two lines and an eight-second lifetime. It respects Reduce Motion.
@@ -60,11 +74,12 @@ The **key-aware mode picker** shows unavailable providers in gray and provides a
 
 ## Download
 
-Latest public release: **v1.16.0**.
+Latest public release: **v1.17.0**.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.16.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.16.0/AirTranslate-1.16.0.zip)
+- [Download AirTranslate-1.17.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.17.0/AirTranslate-1.17.0.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
+- [AirTranslate 1.17.0 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0)
 - [View release history](Release/VERSION-HISTORY.md)
 
 The open-source DMG and ZIP are ad-hoc signed and not Apple-notarized. If macOS blocks the first launch, follow the [installation guide](docs/GETTING-STARTED.md). Check the DMG hash with:
@@ -149,6 +164,7 @@ The Gemini key is shared by Gemini Live and optional Gemini translated speech ou
 ## Privacy
 
 - Apple Mode uses macOS frameworks and locally managed Apple language assets.
+- EmbeddingGemma 2 file transcription downloads models only on request and processes audio and transcripts locally without uploading them.
 - GPT, Gemini, Meta, Azure, Nari, Grok, and Qwen modes send only the audio or text needed for the selected feature directly to that provider using your key. Gemini TTS sends stable translated text only after you choose a Gemini speech model.
 - Saved transcripts are normal text files on your Mac only when file saving is enabled.
 - See [Release/PRIVACY-NOTICE.md](Release/PRIVACY-NOTICE.md) for the longer provider and storage guide.
@@ -156,6 +172,7 @@ The Gemini key is shared by Gemini Live and optional Gemini translated speech ou
 ## Requirements
 
 - macOS 26.0 or later
+- Optional EmbeddingGemma 2 file transcription: Apple Silicon and macOS 27 or later
 - Swift 6.4 or later for source builds
 - A Mac that supports system-audio capture
 - Apple Speech and Apple Translation framework availability
@@ -166,6 +183,7 @@ The Gemini key is shared by Gemini Live and optional Gemini translated speech ou
 - [Getting Started](docs/GETTING-STARTED.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Nari STT notes](docs/nari-stt.md)
+- [EmbeddingGemma 2 method and file transcription](docs/embeddinggemma-transcription.md)
 - [Changelog](CHANGELOG.md)
 - [Version History](Release/VERSION-HISTORY.md)
 

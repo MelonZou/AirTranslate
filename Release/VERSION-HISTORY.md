@@ -1,5 +1,19 @@
 # AirTranslate Version History
 
+## 1.17.0 - 2026-10-23
+
+### Added
+
+- Optional local English audio-file transcription in Settings > General using the independent public EmbeddingGemma 2 reader v2 reproduction. Requires Apple Silicon and macOS 27+, with a 60-minute / 2 GB input limit. It remains separate from live captions and provides no punctuation, capitalization, translation, or speaker identification.
+- The frozen audio encoder and trained reader map time-based audio representations to English words or blank; CTC decoding assembles the transcript. The original experiment's code and reader weights are not public, and its "one hour in about 13 seconds" result is not a performance guarantee for AirTranslate.
+- Explicit model download of about 935 MB from a pinned Hugging Face revision, with size and SHA-256 verification, at least 2 GiB free for installation, progress and cancellation. The option uploads neither audio nor results and needs no API key.
+- Copy or save the transcript as UTF-8 text and see audio length and processing time for the current run. First model loading and compilation can take longer; cancellation waits for the active model call before discarding its result.
+
+### Availability
+
+- Version 1.17.0 / build 1170 keeps macOS 26 as the app minimum. The existing 1.16.0 caption, transcription, translation, and window-control improvements remain available; they are not new fixes in this release.
+- DMG and ZIP remain ad-hoc signed and not Apple-notarized. [Method and setup](../docs/embeddinggemma-transcription.md).
+
 ## 1.16.0 - 2026-10-04
 
 ### Added

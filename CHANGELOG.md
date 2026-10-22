@@ -2,6 +2,20 @@
 
 All notable changes to AirTranslate are documented in this file.
 
+## 1.17.0 - 2026-10-23
+
+### Added
+
+- Settings > General adds optional EmbeddingGemma 2 file transcription using the independent public reader v2 reproduction. It runs locally on Apple Silicon with macOS 27 or later, supports English audio files up to 60 minutes / 2 GB, and works separately from live captions. It does not restore punctuation or capitalization, translate audio, or identify speakers.
+- A frozen audio encoder produces time-based representations; a trained reader compares them with English word embeddings and blank, then CTC decoding produces the transcript. The original experiment's code and reader weights are not public, so this option uses separately released models and does not promise the original "one hour in about 13 seconds" result.
+- Models and supporting data download from Hugging Face only after choosing Download models (about 935 MB). Files use a pinned revision with size and SHA-256 checks. At least 2 GiB of free space is required for installation; first model loading and local compilation can take additional time and space. Audio and transcript results are never uploaded by this option, and no API key is needed.
+- File transcription includes progress, cancellation, transcript copying, UTF-8 text export, and the selected audio's length and processing time for the current run. Cancellation waits for an active model call to finish before discarding the result.
+
+### Availability
+
+- AirTranslate still requires macOS 26 or later; only the new Core AI transcription option requires Apple Silicon and macOS 27 or later. Existing Apple and cloud workflows, caption controls, and the transcription/translation stability improvements introduced in 1.16.0 remain available.
+- DMG and ZIP builds are ad-hoc signed and are not Apple-notarized. See [the method, setup and limitations](docs/embeddinggemma-transcription.md) before using the experimental option.
+
 ## 1.16.0 - 2026-10-04
 
 ### Added

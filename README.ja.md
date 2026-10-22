@@ -23,7 +23,21 @@
 
 AirTranslateはMacで再生中の音声を取り込み、ライブで文字起こしし、翻訳ワークフローを選んだ場合は翻訳し、必要に応じて他のアプリの上にフローティング字幕を表示します。Apple Modeは引き続きローカル優先の標準ワークフローです。クラウドエンジンは任意で、対応するプロバイダーキーを設定すると利用できます。
 
-AirTranslate **1.16.0/build1160** は既存の文字起こしの安定性、重複翻訳の処理、字幕の読みやすさ、ウィンドウ操作を改善し、Apple 翻訳オプション、実験的な Jev 候補選択、フローティング専用キャプチャを追加します。
+AirTranslate **1.17.0/build1170** は、EmbeddingGemma 2 による英語音声ファイルのローカル文字起こしを追加します。Apple モードを既定とし、既存の字幕・翻訳の改善も引き続き利用できます。
+
+## 1.17.0 の追加機能: 英語ファイルのローカル文字起こし
+
+- **任意のファイル文字起こし:** 設定 > 一般 > EmbeddingGemma 2 ファイル文字起こし（実験）で利用できます。Apple Silicon・macOS 27 以降が必要です。アプリ全体の最小要件は引き続き macOS 26 です。英語音声のみ、最大60分／2 GB。ライブ字幕とは独立し、句読点・大文字小文字の復元、音声の翻訳、話者識別には対応しません。
+- **仕組み:** 固定した音声エンコーダーが時系列の表現を作り、学習済み reader が英単語の埋め込みに対応させ、各時点で単語または blank を選びます。CTC デコードが連続する重複と blank を整理して文字列を作ります。元の実験のコード・reader 重みは非公開のため、独立した公開再現の reader v2 を使用します。
+- **明示的なモデルダウンロードと整合性:** モデルをダウンロードを押した場合にだけ、固定した Hugging Face revision から約935 MBを取得します。インストール完了前にファイルサイズと SHA-256 を確認します。インストールには2 GiB以上の空き容量が必要で、ローカルコンパイルにも容量を使用します。API キーは不要で、音声・文字起こし結果はアップロードしません。
+- **使い方と書き出し:** ライブキャプチャを停止し、モデルを取得して英語音声を選択し、ローカル文字起こしを実行します。進捗とキャンセルを提供し、結果のコピーや UTF-8 テキスト保存が可能です。キャンセルすると実行中のモデル処理が終わった後に結果を破棄します。今回の音声の長さと、デコード・モデル読み込みを含む処理時間を表示します。
+- **実験的な精度と速度:** 訛り、雑音、固有名詞、固定語彙にない語で結果が変わります。初回のモデル読み込みには時間がかかる場合があります。元の実験の1時間を約13秒で処理するという主張は、AirTranslate の性能保証ではありません。
+
+[手法・設定・制限](docs/embeddinggemma-transcription.md) · [AirTranslate 1.17.0 リリース](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0)。
+
+## 継続して利用できる字幕・翻訳の改善
+
+**1.16.0 で導入した改善**を引き続き利用できます。文字起こしの安定性、重複翻訳の処理、字幕の読みやすさ、Apple 翻訳オプション、任意の Jev 候補選択、フローティング専用のウィンドウ操作を含みます。以下は継続提供する機能であり、1.17.0 の新規修正ではありません。
 
 - **フローティング専用の開始と操作:** 待機中はキャプチャを開始し、一時停止中は再開して、実行状態になってからメイン画面を最小化します。開始に失敗した場合はメイン操作画面を維持します。メニューバーとアプリメニューからも開始・停止、一時停止・再開できます。
 - **直前の字幕表示:** 現在の字幕とともに直前の字幕を1ブロック、最大2行で8秒間表示します。「視差効果を減らす」に対応します。
@@ -56,11 +70,12 @@ AirTranslate **1.16.0/build1160** は既存の文字起こしの安定性、重�
 
 ## ダウンロード
 
-現在の公開最新版: **v1.16.0**。
+現在の公開最新版: **v1.17.0**。
 
 - [AirTranslate.dmgをダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [AirTranslate-1.16.0.zipをダウンロード](https://github.com/himomohi/AirTranslate/releases/download/v1.16.0/AirTranslate-1.16.0.zip)
+- [AirTranslate-1.17.0.zipをダウンロード](https://github.com/himomohi/AirTranslate/releases/download/v1.17.0/AirTranslate-1.17.0.zip)
 - [AirTranslate.dmg.sha256をダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
+- [AirTranslate 1.17.0 リリースノート](https://github.com/himomohi/AirTranslate/releases/tag/v1.17.0)
 - [バージョン履歴を見る](Release/VERSION-HISTORY.md)
 
 オープンソースのDMGとZIPはad-hoc署名で、Appleの公証を受けていません。初回起動がブロックされた場合は[インストールガイド](docs/GETTING-STARTED.md)を確認してください。DMGのハッシュは次のように確認できます。
@@ -144,6 +159,7 @@ GeminiキーはGemini Liveと任意のGemini翻訳音声出力で共有します
 
 ## プライバシー
 
+- EmbeddingGemma 2 ファイル文字起こしは要求時のみモデルをダウンロードし、音声と結果をアップロードせず端末内で処理します。
 - Apple ModeはmacOSフレームワークとApple管理の言語アセットを使います。
 - GPT、Gemini、Meta、Azure、Nari、Grok、Qwenモードは、選択した機能に必要な音声またはテキストだけを、ユーザーのキーで該当プロバイダーへ直接送信します。Gemini TTSはユーザーがGemini音声モデルを選んだ後、安定した翻訳テキストだけを送信します。
 - 保存済み記録は、ファイル保存を有効にした場合にだけMac上の通常のテキストファイルとして残ります。
@@ -152,6 +168,7 @@ GeminiキーはGemini Liveと任意のGemini翻訳音声出力で共有します
 ## 必要条件
 
 - macOS 26.0以降
+- 任意の EmbeddingGemma 2 ファイル文字起こし: Apple Silicon・macOS 27 以降
 - ソースビルド用Swift 6.4以降
 - システムオーディオ取り込みに対応したMac
 - Apple SpeechとApple Translationフレームワークが利用できる環境
@@ -162,6 +179,7 @@ GeminiキーはGemini Liveと任意のGemini翻訳音声出力で共有します
 - [Getting Started](docs/GETTING-STARTED.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Nari STT notes](docs/nari-stt.md)
+- [EmbeddingGemma 2 の手法とファイル文字起こし](docs/embeddinggemma-transcription.md)
 - [変更履歴](CHANGELOG.md)
 - [バージョン履歴](Release/VERSION-HISTORY.md)
 

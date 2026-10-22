@@ -2,3 +2,19 @@ AirTranslate
 Copyright 2026 himomohi
 
 This product includes software developed by himomohi.
+
+The experimental EmbeddingGemma 2 file transcription option includes adapted
+audio preprocessing and inference code from john-rocky/eg2-transcribe,
+revision e9c1c2653ff2ebe81447394b3cf22e407433dbed, licensed under the
+Apache License, Version 2.0:
+https://github.com/john-rocky/eg2-transcribe
+AirTranslate modifications include bounded file decoding, cancellation,
+validated model installation, and integration with the settings interface.
+
+The optional models are downloaded separately from
+mlboydaisuke/EmbeddingGemma-2-Transcribe-CoreAI, revision
+76865ae46793e05617c2a7420454b0c7eb8541a4. Their LICENSE and NOTICE are
+retained with the downloaded models. They contain Google's EmbeddingGemma 2
+audio encoder and the independently trained reader v2 by mlboydaisuke
+(john-rocky). EmbeddingGemma 2 deployments must adhere to the Gemma Prohibited
+Use Policy: https://ai.google.dev/gemma/prohibited_use_policy
