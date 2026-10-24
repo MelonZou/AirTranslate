@@ -752,9 +752,9 @@ struct TranslationSessionStoreLanguageCandidateTests {
     func captureStartFailuresChooseActionableRecovery() {
         #expect(
             CaptureStartRecoveryAction.forFailure(
-                CaptureError.screenRecordingNotGranted,
+                CaptureError.systemAudioUnavailable(-1),
                 audioInputSource: .systemAudio
-            ) == .privacy(.screenRecording)
+            ) == .privacy(.systemAudioRecording)
         )
         #expect(
             CaptureStartRecoveryAction.forFailure(
@@ -767,12 +767,6 @@ struct TranslationSessionStoreLanguageCandidateTests {
                 SpeechError.notAuthorized,
                 audioInputSource: .microphone
             ) == .privacy(.speechRecognition)
-        )
-        #expect(
-            CaptureStartRecoveryAction.forFailure(
-                CaptureError.noDisplay,
-                audioInputSource: .systemAudio
-            ) == .retry
         )
         #expect(
             CaptureStartRecoveryAction.forReadiness(

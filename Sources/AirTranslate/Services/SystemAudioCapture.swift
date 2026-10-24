@@ -1,5 +1,6 @@
 import AVFoundation
-import CoreGraphics
+import AudioToolbox
+import CoreAudio
 import ScreenCaptureKit
 
 protocol SystemAudioCaptureDelegate: AnyObject {
@@ -23,65 +24,6 @@ protocol SystemAudioCaptureDelegate: AnyObject {
         _ capture: SystemAudioCapture,
         generation: UInt64
     )
-}
-
-struct ScreenRecordingRequestAttemptStore: @unchecked Sendable {
-    private static let userDefaultsKey = "AirTranslate.screenRecordingAccessRequestAttempted"
-
-    let hasRequestedAccess: () -> Bool
-    let markRequestedAccess: () -> Void
-
-    static func userDefaults(_ defaults: UserDefaults = .standard) -> Self {
-        Self(
-            hasRequestedAccess: { defaults.bool(forKey: userDefaultsKey) },
-            markRequestedAccess: { defaults.set(true, forKey: userDefaultsKey) }
-        )
-    }
-}
-
-/// Persists the system screen-recording request attempt across app launches.
-/// The TCC preflight still wins so an approval made in System Settings is
-/// usable without another request from the app.
-final class ScreenRecordingAccessPolicy: @unchecked Sendable {
-    typealias AccessCheck = () -> Bool
-
-    private let preflightAccess: AccessCheck
-    private let requestAccess: AccessCheck
-    private let requestAttemptStore: ScreenRecordingRequestAttemptStore
-    private let stateLock = NSLock()
-
-    init(
-        preflightAccess: @escaping AccessCheck = CGPreflightScreenCaptureAccess,
-        requestAccess: @escaping AccessCheck = CGRequestScreenCaptureAccess,
-        requestAttemptStore: ScreenRecordingRequestAttemptStore = .userDefaults()
-    ) {
-        self.preflightAccess = preflightAccess
-        self.requestAccess = requestAccess
-        self.requestAttemptStore = requestAttemptStore
-    }
-
-    func hasAccessOrRequestsOnce() -> Bool {
-        if preflightAccess() {
-            return withStateLock {
-                if !requestAttemptStore.hasRequestedAccess() {
-                    requestAttemptStore.markRequestedAccess()
-                }
-                return true
-            }
-        }
-
-        return withStateLock {
-            guard !requestAttemptStore.hasRequestedAccess() else { return false }
-            requestAttemptStore.markRequestedAccess()
-            return requestAccess()
-        }
-    }
-
-    private func withStateLock<Result>(_ body: () -> Result) -> Result {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return body()
-    }
 }
 
 actor CaptureOperationGate {
@@ -109,9 +51,113 @@ actor CaptureOperationGate {
     }
 }
 
+/// Converts the tap's native float PCM (any channel count, interleaved or planar)
+/// into mono float PCM at the requested sample rate.
+private final class TapAudioConverter: @unchecked Sendable {
+    private let monoInputFormat: AVAudioFormat
+    private let converter: AVAudioConverter
+    private let rateRatio: Double
+    let outputFormat: AVAudioFormat
+
+    init?(tapFormat: AVAudioFormat, outputSampleRate: Double) {
+        guard tapFormat.commonFormat == .pcmFormatFloat32,
+              let monoInput = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: tapFormat.sampleRate,
+                  channels: 1,
+                  interleaved: false
+              ),
+              let output = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: outputSampleRate,
+                  channels: 1,
+                  interleaved: false
+              ),
+              let converter = AVAudioConverter(from: monoInput, to: output)
+        else {
+            return nil
+        }
+
+        monoInputFormat = monoInput
+        outputFormat = output
+        self.converter = converter
+        rateRatio = outputSampleRate / tapFormat.sampleRate
+    }
+
+    func convert(_ list: UnsafePointer<AudioBufferList>) -> AVAudioPCMBuffer? {
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+        guard let first = buffers.first else { return nil }
+
+        let floatSize = MemoryLayout<Float>.size
+        let frameCount: Int
+        if buffers.count == 1 {
+            let channels = max(1, Int(first.mNumberChannels))
+            frameCount = Int(first.mDataByteSize) / (floatSize * channels)
+        } else {
+            frameCount = Int(first.mDataByteSize) / floatSize
+        }
+        guard frameCount > 0,
+              let input = AVAudioPCMBuffer(
+                  pcmFormat: monoInputFormat,
+                  frameCapacity: AVAudioFrameCount(frameCount)
+              ),
+              let mono = input.floatChannelData?[0]
+        else {
+            return nil
+        }
+        input.frameLength = AVAudioFrameCount(frameCount)
+
+        if buffers.count == 1 {
+            guard let data = first.mData else { return nil }
+            let channels = max(1, Int(first.mNumberChannels))
+            let samples = data.assumingMemoryBound(to: Float.self)
+            for frame in 0..<frameCount {
+                var sum: Float = 0
+                for channel in 0..<channels {
+                    sum += samples[frame * channels + channel]
+                }
+                mono[frame] = sum / Float(channels)
+            }
+        } else {
+            for frame in 0..<frameCount { mono[frame] = 0 }
+            var usedChannels: Float = 0
+            for buffer in buffers {
+                guard let data = buffer.mData else { continue }
+                let available = min(frameCount, Int(buffer.mDataByteSize) / floatSize)
+                let samples = data.assumingMemoryBound(to: Float.self)
+                for frame in 0..<available { mono[frame] += samples[frame] }
+                usedChannels += 1
+            }
+            guard usedChannels > 0 else { return nil }
+            for frame in 0..<frameCount { mono[frame] /= usedChannels }
+        }
+
+        let capacity = AVAudioFrameCount(Double(frameCount) * rateRatio) + 32
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+            return nil
+        }
+
+        var supplied = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if supplied {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return input
+        }
+        guard status != .error, output.frameLength > 0 else { return nil }
+        return output
+    }
+}
+
+/// Captures system output audio with a Core Audio process tap. Unlike a
+/// ScreenCaptureKit stream this creates no screen-capture session, so DRM video
+/// (for example the Apple TV app) is not blanked while capturing.
 final class SystemAudioCapture: NSObject, @unchecked Sendable {
     private static let audioLevelReportInterval = 8
-    private static let sharedScreenRecordingAccessPolicy = ScreenRecordingAccessPolicy()
 
     static func isUserStoppedError(_ error: Error) -> Bool {
         if error is SystemAudioCaptureLifecycleOutcome {
@@ -126,37 +172,40 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         !isUserStoppedError(error)
     }
 
-    private struct ActiveStream {
-        let stream: SCStream
+    private final class ActiveCapture: @unchecked Sendable {
+        let tapID: AudioObjectID
+        let aggregateID: AudioObjectID
+        let converter: TapAudioConverter
         let generation: UInt64
-        var audioSampleCount: Int
+        var ioProcID: AudioDeviceIOProcID?
+        var audioSampleCount = 0
+
+        init(
+            tapID: AudioObjectID,
+            aggregateID: AudioObjectID,
+            converter: TapAudioConverter,
+            generation: UInt64
+        ) {
+            self.tapID = tapID
+            self.aggregateID = aggregateID
+            self.converter = converter
+            self.generation = generation
+        }
     }
 
     private let stateLock = NSLock()
     private let operationGate = CaptureOperationGate()
-    private let sampleQueue = DispatchQueue(label: "AirTranslate.SystemAudioCapture.sampleQueue")
+    private let sampleQueue = DispatchQueue(
+        label: "AirTranslate.SystemAudioCapture.sampleQueue",
+        qos: .userInteractive
+    )
     private weak var delegateStorage: SystemAudioCaptureDelegate?
-    private let screenRecordingAccessPolicy: ScreenRecordingAccessPolicy
     private var operationGeneration: UInt64 = 0
-    private var userStoppedGeneration: UInt64?
-    private var activeStream: ActiveStream?
-
-    init(screenRecordingAccessPolicy: ScreenRecordingAccessPolicy? = nil) {
-        self.screenRecordingAccessPolicy = screenRecordingAccessPolicy
-            ?? Self.sharedScreenRecordingAccessPolicy
-        super.init()
-    }
+    private var activeCapture: ActiveCapture?
 
     var delegate: SystemAudioCaptureDelegate? {
         get { withStateLock { delegateStorage } }
         set { withStateLock { delegateStorage = newValue } }
-    }
-
-    @MainActor
-    func requestScreenRecordingAccess() throws {
-        guard screenRecordingAccessPolicy.hasAccessOrRequestsOnce() else {
-            throw CaptureError.screenRecordingNotGranted
-        }
     }
 
     @MainActor
@@ -192,108 +241,259 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         await performStop()
         try ensureOperationIsCurrent(operation)
 
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
+        let description = CATapDescription(
+            stereoGlobalTapButExcludeProcesses: Self.currentProcessObjectIDs()
         )
-        try ensureOperationIsCurrent(operation)
+        description.name = "AirTranslate System Audio"
+        description.muteBehavior = .unmuted
+        description.isPrivate = true
 
-        guard let display = content.displays.first else {
-            throw CaptureError.noDisplay
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        try Self.check(AudioHardwareCreateProcessTap(description, &tapID))
+
+        let converter: TapAudioConverter
+        do {
+            var streamDescription = try Self.tapStreamDescription(of: tapID)
+            guard let tapFormat = AVAudioFormat(streamDescription: &streamDescription),
+                  let tapConverter = TapAudioConverter(
+                      tapFormat: tapFormat,
+                      outputSampleRate: Double(sampleRate)
+                  )
+            else {
+                throw CaptureError.systemAudioUnavailable(kAudioHardwareUnsupportedOperationError)
+            }
+            converter = tapConverter
+        } catch {
+            AudioHardwareDestroyProcessTap(tapID)
+            throw error
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
-        let configuration = SCStreamConfiguration()
-        configuration.width = 2
-        configuration.height = 2
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-        configuration.capturesAudio = true
-        configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = sampleRate
-        configuration.channelCount = 1
+        let aggregateDescription: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "AirTranslate System Audio",
+            kAudioAggregateDeviceUIDKey: UUID().uuidString,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceTapAutoStartKey: true,
+            kAudioAggregateDeviceTapListKey: [[
+                kAudioSubTapUIDKey: description.uuid.uuidString,
+                kAudioSubTapDriftCompensationKey: true,
+            ]],
+        ]
+        var aggregateID = AudioObjectID(kAudioObjectUnknown)
+        let aggregateStatus = AudioHardwareCreateAggregateDevice(
+            aggregateDescription as CFDictionary,
+            &aggregateID
+        )
+        guard aggregateStatus == noErr else {
+            AudioHardwareDestroyProcessTap(tapID)
+            throw CaptureError.systemAudioUnavailable(aggregateStatus)
+        }
 
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
-        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+        let capture = ActiveCapture(
+            tapID: tapID,
+            aggregateID: aggregateID,
+            converter: converter,
+            generation: generation
+        )
+
+        var procID: AudioDeviceIOProcID?
+        let procStatus = AudioDeviceCreateIOProcIDWithBlock(
+            &procID,
+            aggregateID,
+            sampleQueue
+        ) { [weak self, weak capture] _, inputData, _, _, _ in
+            guard let self, let capture else { return }
+            self.handleInput(inputData, capture: capture)
+        }
+        guard procStatus == noErr, let procID else {
+            teardown(capture)
+            throw CaptureError.systemAudioUnavailable(procStatus)
+        }
+        capture.ioProcID = procID
 
         let installed = withStateLock {
             guard operationGeneration == operation else { return false }
-            activeStream = ActiveStream(
-                stream: stream,
-                generation: generation,
-                audioSampleCount: 0
-            )
+            activeCapture = capture
             return true
         }
         guard installed else {
-            removeOutputs(from: stream)
+            teardown(capture)
             throw CancellationError()
         }
 
-        do {
-            try await stream.startCapture()
-            let completion = withStateLock {
-                let stoppedByUser = userStoppedGeneration == generation
-                if stoppedByUser {
-                    userStoppedGeneration = nil
-                }
-                return (
-                    remainsCurrent: operationGeneration == operation && activeStream?.stream === stream,
-                    stoppedByUser: stoppedByUser
-                )
-            }
-            if completion.stoppedByUser {
-                throw SystemAudioCaptureLifecycleOutcome.userStopped
-            }
-            guard completion.remainsCurrent else {
-                await clearAndStop(stream)
-                throw CancellationError()
-            }
-        } catch {
-            let stoppedByUser = withStateLock {
-                guard userStoppedGeneration == generation else { return false }
-                userStoppedGeneration = nil
-                return true
-            }
-            await clearAndStop(stream)
-            if stoppedByUser || Self.isUserStoppedError(error) {
-                throw SystemAudioCaptureLifecycleOutcome.userStopped
-            }
-            throw error
+        let startStatus = AudioDeviceStart(aggregateID, procID)
+        guard startStatus == noErr else {
+            clearAndTeardown(capture)
+            throw CaptureError.systemAudioUnavailable(startStatus)
+        }
+
+        let remainsCurrent = withStateLock {
+            operationGeneration == operation && activeCapture === capture
+        }
+        guard remainsCurrent else {
+            clearAndTeardown(capture)
+            throw CancellationError()
         }
     }
 
     private func performStop() async {
-        let stream = withStateLock {
-            let stream = activeStream?.stream
-            activeStream = nil
-            return stream
+        let capture = withStateLock {
+            let capture = activeCapture
+            activeCapture = nil
+            return capture
         }
-        guard let stream else { return }
-
-        removeOutputs(from: stream)
-        try? await stream.stopCapture()
+        guard let capture else { return }
+        teardown(capture)
     }
 
-    private func clearAndStop(_ stream: SCStream) async {
+    private func clearAndTeardown(_ capture: ActiveCapture) {
         withStateLock {
-            if activeStream?.stream === stream {
-                activeStream = nil
+            if activeCapture === capture {
+                activeCapture = nil
             }
         }
-        removeOutputs(from: stream)
-        try? await stream.stopCapture()
+        teardown(capture)
     }
 
-    private func removeOutputs(from stream: SCStream) {
-        try? stream.removeStreamOutput(self, type: .screen)
-        try? stream.removeStreamOutput(self, type: .audio)
+    private func teardown(_ capture: ActiveCapture) {
+        if let ioProcID = capture.ioProcID {
+            AudioDeviceStop(capture.aggregateID, ioProcID)
+            AudioDeviceDestroyIOProcID(capture.aggregateID, ioProcID)
+            capture.ioProcID = nil
+        }
+        AudioHardwareDestroyAggregateDevice(capture.aggregateID)
+        AudioHardwareDestroyProcessTap(capture.tapID)
+    }
+
+    private func handleInput(_ inputData: UnsafePointer<AudioBufferList>, capture: ActiveCapture) {
+        guard let pcm = capture.converter.convert(inputData) else { return }
+
+        let delivery = withStateLock { () -> (delegate: SystemAudioCaptureDelegate?, count: Int)? in
+            guard activeCapture === capture else { return nil }
+            capture.audioSampleCount += 1
+            return (delegateStorage, capture.audioSampleCount)
+        }
+        guard let delivery, let delegate = delivery.delegate,
+              let sampleBuffer = Self.makeSampleBuffer(from: pcm)
+        else {
+            return
+        }
+
+        delegate.systemAudioCapture(self, didOutput: sampleBuffer, generation: capture.generation)
+        if delivery.count == 1 || delivery.count % Self.audioLevelReportInterval == 0 {
+            delegate.systemAudioCapture(
+                self,
+                didReceiveAudioSampleCount: delivery.count,
+                level: Self.audioLevel(of: pcm),
+                generation: capture.generation
+            )
+        }
+    }
+
+    private static func makeSampleBuffer(from pcm: AVAudioPCMBuffer) -> CMSampleBuffer? {
+        var formatDescription: CMAudioFormatDescription?
+        guard CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: pcm.format.streamDescription,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDescription
+        ) == noErr, let formatDescription else {
+            return nil
+        }
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: Int32(pcm.format.sampleRate)),
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        guard CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: nil,
+            dataReady: false,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: formatDescription,
+            sampleCount: CMItemCount(pcm.frameLength),
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        ) == noErr, let sampleBuffer else {
+            return nil
+        }
+
+        guard CMSampleBufferSetDataBufferFromAudioBufferList(
+            sampleBuffer,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0,
+            bufferList: pcm.audioBufferList
+        ) == noErr else {
+            return nil
+        }
+        return sampleBuffer
+    }
+
+    private static func audioLevel(of pcm: AVAudioPCMBuffer) -> Float? {
+        guard let samples = pcm.floatChannelData?[0], pcm.frameLength > 0 else { return nil }
+
+        var squareSum: Double = 0
+        for index in 0..<Int(pcm.frameLength) {
+            let sample = Double(samples[index])
+            squareSum += sample * sample
+        }
+        let rms = sqrt(squareSum / Double(pcm.frameLength))
+        return Float(20 * log10(max(rms, 0.000_001)))
+    }
+
+    private static func check(_ status: OSStatus) throws {
+        guard status == noErr else {
+            throw CaptureError.systemAudioUnavailable(status)
+        }
+    }
+
+    private static func tapStreamDescription(of tapID: AudioObjectID) throws -> AudioStreamBasicDescription {
+        var description = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        try check(AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &description))
+        return description
+    }
+
+    /// Excluding this process keeps AirTranslate's own audio out of the transcript.
+    private static func currentProcessObjectIDs() -> [AudioObjectID] {
+        var pid = getpid()
+        var objectID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            UInt32(MemoryLayout<pid_t>.size),
+            &pid,
+            &size,
+            &objectID
+        )
+        guard status == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else { return [] }
+        return [objectID]
     }
 
     private func beginOperation() -> UInt64 {
         withStateLock {
             operationGeneration &+= 1
-            userStoppedGeneration = nil
             return operationGeneration
         }
     }
@@ -317,175 +517,26 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
     }
 }
 
-extension SystemAudioCapture: SCStreamOutput {
-    func stream(
-        _ stream: SCStream,
-        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-        of type: SCStreamOutputType
-    ) {
-        guard type == .audio, sampleBuffer.isValid else { return }
-
-        let delivery = withStateLock {
-            guard var activeStream, activeStream.stream === stream else {
-                return (
-                    delegate: Optional<SystemAudioCaptureDelegate>.none,
-                    generation: UInt64.zero,
-                    count: 0
-                )
-            }
-
-            activeStream.audioSampleCount += 1
-            self.activeStream = activeStream
-            return (
-                delegate: delegateStorage,
-                generation: activeStream.generation,
-                count: activeStream.audioSampleCount
-            )
-        }
-        guard let delegate = delivery.delegate else { return }
-
-        delegate.systemAudioCapture(
-            self,
-            didOutput: sampleBuffer,
-            generation: delivery.generation
-        )
-        if delivery.count == 1 || delivery.count % Self.audioLevelReportInterval == 0 {
-            delegate.systemAudioCapture(
-                self,
-                didReceiveAudioSampleCount: delivery.count,
-                level: audioLevel(from: sampleBuffer),
-                generation: delivery.generation
-            )
-        }
-    }
-
-    private func audioLevel(from sampleBuffer: CMSampleBuffer) -> Float? {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)
-        else {
-            return nil
-        }
-
-        var listSize = 0
-        CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: &listSize,
-            bufferListOut: nil,
-            bufferListSize: 0,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: nil
-        )
-
-        guard listSize > 0 else { return nil }
-
-        let rawList = UnsafeMutableRawPointer.allocate(
-            byteCount: listSize,
-            alignment: MemoryLayout<AudioBufferList>.alignment
-        )
-        defer { rawList.deallocate() }
-
-        let audioBufferList = rawList.bindMemory(to: AudioBufferList.self, capacity: 1)
-        var blockBuffer: CMBlockBuffer?
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: audioBufferList,
-            bufferListSize: listSize,
-            blockBufferAllocator: kCFAllocatorDefault,
-            blockBufferMemoryAllocator: kCFAllocatorDefault,
-            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBuffer
-        )
-
-        guard status == noErr else { return nil }
-
-        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
-        let isFloat = streamDescription.pointee.mFormatFlags & kAudioFormatFlagIsFloat != 0
-        var squareSum: Double = 0
-        var sampleCount = 0
-
-        for buffer in buffers {
-            guard let data = buffer.mData else { continue }
-
-            if isFloat {
-                let samples = data.bindMemory(to: Float.self, capacity: Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
-                let count = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
-                for index in 0..<count {
-                    let sample = Double(samples[index])
-                    squareSum += sample * sample
-                }
-                sampleCount += count
-            } else {
-                let samples = data.bindMemory(to: Int16.self, capacity: Int(buffer.mDataByteSize) / MemoryLayout<Int16>.size)
-                let count = Int(buffer.mDataByteSize) / MemoryLayout<Int16>.size
-                for index in 0..<count {
-                    let sample = Double(samples[index]) / Double(Int16.max)
-                    squareSum += sample * sample
-                }
-                sampleCount += count
-            }
-        }
-
-        guard sampleCount > 0 else { return nil }
-        let rms = sqrt(squareSum / Double(sampleCount))
-        let decibels = 20 * log10(max(rms, 0.000_001))
-        return Float(decibels)
-    }
-}
-
-extension SystemAudioCapture: SCStreamDelegate {
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        let didStopByUser = Self.isUserStoppedError(error)
-        let delivery = withStateLock {
-            guard let activeStream, activeStream.stream === stream else {
-                return (
-                    delegate: Optional<SystemAudioCaptureDelegate>.none,
-                    generation: UInt64.zero
-                )
-            }
-
-            operationGeneration &+= 1
-            if didStopByUser {
-                userStoppedGeneration = activeStream.generation
-            }
-            self.activeStream = nil
-            return (delegate: delegateStorage, generation: activeStream.generation)
-        }
-
-        removeOutputs(from: stream)
-        if didStopByUser {
-            delivery.delegate?.systemAudioCaptureDidStopByUser(
-                self,
-                generation: delivery.generation
-            )
-        } else {
-            delivery.delegate?.systemAudioCapture(
-                self,
-                didFail: error,
-                generation: delivery.generation
-            )
-        }
-    }
-}
-
 enum SystemAudioCaptureLifecycleOutcome: Error {
     case userStopped
 }
 
-enum CaptureError: LocalizedError {
-    case screenRecordingNotGranted
+enum CaptureError: LocalizedError, Equatable {
+    case systemAudioUnavailable(OSStatus)
     case microphoneNotGranted
     case microphoneUnavailable
     case microphoneInterrupted
     case microphoneRuntimeFailure
-    case noDisplay
 
     var errorDescription: String? {
         switch self {
-        case .screenRecordingNotGranted:
-            AppText.screenRecordingNotGranted
+        case .systemAudioUnavailable(let status):
+            AppText.localized(
+                english: "System audio capture could not start (code \(status)). Allow System Audio Recording for AirTranslate in Privacy & Security, then try again.",
+                korean: "시스템 오디오 캡처를 시작할 수 없습니다(코드 \(status)). 개인정보 보호 및 보안에서 AirTranslate의 시스템 오디오 녹음을 허용한 뒤 다시 시도하세요.",
+                japanese: "システムオーディオのキャプチャを開始できません(コード \(status))。プライバシーとセキュリティで AirTranslate のシステムオーディオ録音を許可してから再試行してください。",
+                chineseSimplified: "无法开始系统音频捕获(代码 \(status))。请在“隐私与安全性”中允许 AirTranslate 的系统音频录制,然后重试。"
+            )
         case .microphoneNotGranted:
             AppText.microphoneNotGranted
         case .microphoneUnavailable:
@@ -504,8 +555,6 @@ enum CaptureError: LocalizedError {
                 japanese: "マイクのキャプチャが予期せず停止しました。",
                 chineseSimplified: "麦克风捕获意外停止。"
             )
-        case .noDisplay:
-            AppText.noActiveDisplay
         }
     }
 }

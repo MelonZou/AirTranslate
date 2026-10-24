@@ -13,9 +13,10 @@ enum PrivacySettingsPane: Equatable {
 
     fileprivate var anchor: String {
         switch self {
-        case .screenRecording, .systemAudioRecording:
-            // macOS groups Screen Recording and System Audio Recording in this pane.
+        case .screenRecording:
             "Privacy_ScreenCapture"
+        case .systemAudioRecording:
+            "Privacy_AudioCapture"
         case .microphone:
             "Privacy_Microphone"
         case .speechRecognition:
@@ -40,11 +41,11 @@ enum CaptureStartRecoveryAction: Equatable {
         }
         if let captureError = error as? CaptureError {
             switch captureError {
-            case .screenRecordingNotGranted:
-                return .privacy(.screenRecording)
+            case .systemAudioUnavailable:
+                return .privacy(.systemAudioRecording)
             case .microphoneNotGranted:
                 return .privacy(.microphone)
-            case .microphoneUnavailable, .microphoneInterrupted, .microphoneRuntimeFailure, .noDisplay:
+            case .microphoneUnavailable, .microphoneInterrupted, .microphoneRuntimeFailure:
                 return .retry
             }
         }
@@ -1458,7 +1459,7 @@ final class TranslationSessionStore {
         isStarting = true
         statusMessage = configuration.audioInputSource == .microphone
             ? AppText.checkingMicrophonePermission
-            : AppText.checkingScreenPermission
+            : AppText.checkingSystemAudioPermission
 
         captureStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1467,10 +1468,6 @@ final class TranslationSessionStore {
                 if let captureStopTask {
                     await captureStopTask.value
                     self.captureStopTask = nil
-                }
-                try validatePipelineStart(generation: generation, configuration: configuration)
-                if configuration.audioInputSource == .systemAudio {
-                    try systemAudioCapture.requestScreenRecordingAccess()
                 }
                 try validatePipelineStart(generation: generation, configuration: configuration)
                 if configuration.isUsingGPTTranscriptionMode {
@@ -2049,7 +2046,7 @@ final class TranslationSessionStore {
     }
 
     func openPrivacySettings() {
-        openPrivacySettings(audioInputSource == .microphone ? .microphone : .screenRecording)
+        openPrivacySettings(audioInputSource == .microphone ? .microphone : .systemAudioRecording)
     }
 
     func openPrivacySettings(_ pane: PrivacySettingsPane) {

@@ -1117,9 +1117,9 @@ enum AppText {
         english: "AirTranslate needs Screen Recording, System Audio Recording, and Speech Recognition permission. After changing privacy settings, quit and relaunch the app.",
         korean: "AirTranslate에는 화면 기록, 시스템 오디오 녹음, 음성 인식 권한이 필요합니다. 개인정보 보호 설정을 변경한 뒤 앱을 종료하고 다시 실행하세요."
     )
-    static let checkingScreenPermission = localized(
-        english: "Checking screen recording permission...",
-        korean: "화면 기록 권한 확인 중..."
+    static let checkingSystemAudioPermission = localized(
+        english: "Checking system audio recording permission...",
+        korean: "시스템 오디오 녹음 권한 확인 중..."
     )
     static let checkingMicrophonePermission = localized(
         english: "Checking microphone permission...",
@@ -1417,10 +1417,6 @@ enum AppText {
         english: "The selected speech recognizer is unavailable.",
         korean: "선택한 음성 인식기를 사용할 수 없습니다."
     )
-    static let screenRecordingNotGranted = localized(
-        english: "macOS does not recognize Screen Recording access for this AirTranslate build. If it is already enabled, keep only the current app, toggle access once, then quit and relaunch AirTranslate.",
-        korean: "macOS가 현재 AirTranslate 빌드의 화면 기록 권한을 인식하지 못합니다. 이미 허용했다면 현재 앱만 남기고 권한을 한 번 껐다 켠 뒤 AirTranslate를 종료하고 다시 실행하세요."
-    )
     static let microphoneNotGranted = localized(
         english: "macOS does not recognize Microphone access for this AirTranslate build. If it is already enabled, keep only the current app, toggle access once, then quit and relaunch AirTranslate.",
         korean: "macOS가 현재 AirTranslate 빌드의 마이크 권한을 인식하지 못합니다. 이미 허용했다면 현재 앱만 남기고 권한을 한 번 껐다 켠 뒤 AirTranslate를 종료하고 다시 실행하세요."
@@ -1428,10 +1424,6 @@ enum AppText {
     static let microphoneUnavailable = localized(
         english: "The microphone input could not be started.",
         korean: "마이크 입력을 시작할 수 없습니다."
-    )
-    static let noActiveDisplay = localized(
-        english: "No active display was available for system audio capture.",
-        korean: "시스템 오디오 캡처에 사용할 수 있는 활성 디스플레이가 없습니다."
     )
 
     static func languageTitle(for id: String, fallback: String) -> String {
